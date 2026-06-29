@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import Papa from 'papaparse';
+import * as XLSX from 'xlsx';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 import { Upload, BarChart3, FileText, Sparkles, Plus, Trash2 } from 'lucide-react';
 import './styles.css';
@@ -31,6 +32,24 @@ function parseNumber(value) {
   if (value == null) return 0;
   const clean = String(value).replace(/,/g, '').replace(/[^0-9.-]/g, '');
   return Number(clean) || 0;
+}
+
+function normalizeMetricRow(row, accountId, source = 'archivo') {
+  return {
+    id: crypto.randomUUID(),
+    accountId,
+    date: row.date || row.fecha || row.Date || row.Fecha || new Date().toISOString().slice(0, 10),
+    followers: parseNumber(row.followers || row.seguidores || row.Followers || row.Seguidores),
+    reach: parseNumber(row.reach || row.alcance || row.Reach || row.Alcance),
+    impressions: parseNumber(row.impressions || row.impresiones || row.Impressions || row.Impresiones),
+    views: parseNumber(row.views || row.vistas || row.Views || row.Vistas),
+    likes: parseNumber(row.likes || row['me gusta'] || row.Likes),
+    comments: parseNumber(row.comments || row.comentarios || row.Comments || row.Comentarios),
+    shares: parseNumber(row.shares || row.compartidos || row.Shares || row.Compartidos),
+    clicks: parseNumber(row.clicks || row.clics || row.Clicks || row.Clics),
+    engagement: parseNumber(row.engagement || row.interacciones || row.Engagement || row.Interacciones),
+    source
+  };
 }
 
 function extractFromText(text, accountId) {
@@ -82,29 +101,31 @@ function App() {
     setRawText('');
   }
 
-  function importCsv(file) {
-    Papa.parse(file, {
-      header: true,
-      skipEmptyLines: true,
-      complete: (results) => {
-        const rows = results.data.map((row) => ({
-          id: crypto.randomUUID(),
-          accountId: selectedAccount,
-          date: row.date || row.fecha || new Date().toISOString().slice(0, 10),
-          followers: parseNumber(row.followers || row.seguidores),
-          reach: parseNumber(row.reach || row.alcance),
-          impressions: parseNumber(row.impressions || row.impresiones),
-          views: parseNumber(row.views || row.vistas),
-          likes: parseNumber(row.likes || row['me gusta']),
-          comments: parseNumber(row.comments || row.comentarios),
-          shares: parseNumber(row.shares || row.compartidos),
-          clicks: parseNumber(row.clicks || row.clics),
-          engagement: parseNumber(row.engagement || row.interacciones),
-          source: 'csv'
-        }));
-        save({ ...data, metrics: [...data.metrics, ...rows] });
-      }
-    });
+  function importFile(file) {
+    if (!file || !selectedAccount) return;
+    const name = file.name.toLowerCase();
+    if (name.endsWith('.csv')) {
+      Papa.parse(file, {
+        header: true,
+        skipEmptyLines: true,
+        complete: (results) => {
+          const rows = results.data.map((row) => normalizeMetricRow(row, selectedAccount, 'csv'));
+          save({ ...data, metrics: [...data.metrics, ...rows] });
+        }
+      });
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const workbook = XLSX.read(event.target.result, { type: 'array' });
+      const firstSheet = workbook.SheetNames[0];
+      const sheet = workbook.Sheets[firstSheet];
+      const jsonRows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+      const rows = jsonRows.map((row) => normalizeMetricRow(row, selectedAccount, name.endsWith('.xls') ? 'xls' : 'xlsx'));
+      save({ ...data, metrics: [...data.metrics, ...rows] });
+    };
+    reader.readAsArrayBuffer(file);
   }
 
   function deleteMetric(id) {
@@ -115,7 +136,7 @@ function App() {
     <main className="app">
       <aside className="sidebar">
         <div className="brand"><Sparkles /> <span>BloomStats</span></div>
-        <p>Analiza estadisticas de redes sin sincronizar APIs. Sube texto o CSV y deja que el dashboard haga la talacha.</p>
+        <p>Analiza estadisticas de redes sin sincronizar APIs. Sube texto, CSV o Excel y deja que el dashboard haga la talacha.</p>
         <nav><a>Dashboard</a><a>Importar</a><a>Cuentas</a><a>Analisis</a></nav>
       </aside>
       <section className="content">
@@ -132,7 +153,7 @@ function App() {
         <section className="grid">
           <div className="panel wide">
             <h2><BarChart3/> Evolucion</h2>
-            {enriched.length ? <ResponsiveContainer width="100%" height={300}><LineChart data={enriched}><XAxis dataKey="date"/><YAxis/><Tooltip/><Line type="monotone" dataKey="reach" strokeWidth={3}/><Line type="monotone" dataKey="views" strokeWidth={3}/></LineChart></ResponsiveContainer> : <Empty text="Aun no hay metricas. Importa texto o CSV." />}
+            {enriched.length ? <ResponsiveContainer width="100%" height={300}><LineChart data={enriched}><XAxis dataKey="date"/><YAxis/><Tooltip/><Line type="monotone" dataKey="reach" strokeWidth={3}/><Line type="monotone" dataKey="views" strokeWidth={3}/></LineChart></ResponsiveContainer> : <Empty text="Aun no hay metricas. Importa texto, CSV o Excel." />}
           </div>
           <div className="panel">
             <h2>Resumen IA</h2>
@@ -149,7 +170,7 @@ function App() {
             <h2><Upload/> Importar datos</h2>
             <select value={selectedAccount} onChange={(e)=>setSelectedAccount(e.target.value)}>{data.accounts.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}</select>
             <textarea placeholder="Pega texto copiado de Insights. Ejemplo: Seguidores 320 Alcance 1500 Vistas 4200 Interacciones 180" value={rawText} onChange={(e)=>setRawText(e.target.value)} />
-            <div className="row"><button onClick={importText}>Importar texto</button><label className="file"><FileText size={16}/> CSV<input type="file" accept=".csv" onChange={(e)=>e.target.files?.[0] && importCsv(e.target.files[0])}/></label></div>
+            <div className="row"><button onClick={importText}>Importar texto</button><label className="file"><FileText size={16}/> CSV / XLS / XLSX<input type="file" accept=".csv,.xls,.xlsx" onChange={(e)=>e.target.files?.[0] && importFile(e.target.files[0])}/></label></div>
           </div>
         </section>
         <section className="panel">
