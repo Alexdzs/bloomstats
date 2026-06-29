@@ -1,8 +1,8 @@
 import React, { useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import Papa from 'papaparse';
-import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar } from 'recharts';
-import { Upload, BarChart3, Instagram, Youtube, Facebook, FileText, Sparkles, Plus, Trash2 } from 'lucide-react';
+import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
+import { Upload, BarChart3, FileText, Sparkles, Plus, Trash2 } from 'lucide-react';
 import './styles.css';
 
 const STORAGE_KEY = 'bloomstats-v1';
@@ -23,10 +23,8 @@ function loadData() {
 }
 
 function platformIcon(platform) {
-  if (platform === 'instagram') return <Instagram size={18} />;
-  if (platform === 'youtube') return <Youtube size={18} />;
-  if (platform === 'facebook') return <Facebook size={18} />;
-  return <BarChart3 size={18} />;
+  const labels = { instagram: 'IG', youtube: 'YT', facebook: 'FB', tiktok: 'TT', linkedin: 'IN' };
+  return <span className="platformBadge">{labels[platform] || 'RS'}</span>;
 }
 
 function parseNumber(value) {
@@ -120,20 +118,17 @@ function App() {
         <p>Analiza estadisticas de redes sin sincronizar APIs. Sube texto o CSV y deja que el dashboard haga la talacha.</p>
         <nav><a>Dashboard</a><a>Importar</a><a>Cuentas</a><a>Analisis</a></nav>
       </aside>
-
       <section className="content">
         <header className="hero">
           <div><p className="eyebrow">Marketing dashboard</p><h1>Metricas rapidas, cero datos inventados.</h1><p>Primera version: guarda datos en tu navegador. Siguiente paso: Supabase para nube.</p></div>
           <button onClick={() => save({ ...data, metrics: [] })}><Trash2 size={16}/> limpiar metricas</button>
         </header>
-
         <section className="cards">
           <Card title="Seguidores" value={totals.followers} />
           <Card title="Alcance" value={totals.reach} />
           <Card title="Vistas" value={totals.views} />
           <Card title="Interacciones" value={totals.engagement} />
         </section>
-
         <section className="grid">
           <div className="panel wide">
             <h2><BarChart3/> Evolucion</h2>
@@ -144,7 +139,6 @@ function App() {
             <p>{latest ? `Ultima carga: ${latest.account}. Alcance ${latest.reach || 0}, vistas ${latest.views || 0} e interacciones ${latest.engagement || 0}.` : 'Cuando importes datos, aqui aparecera una lectura rapida del rendimiento.'}</p>
           </div>
         </section>
-
         <section className="grid">
           <div className="panel">
             <h2><Plus/> Cuentas</h2>
@@ -158,7 +152,6 @@ function App() {
             <div className="row"><button onClick={importText}>Importar texto</button><label className="file"><FileText size={16}/> CSV<input type="file" accept=".csv" onChange={(e)=>e.target.files?.[0] && importCsv(e.target.files[0])}/></label></div>
           </div>
         </section>
-
         <section className="panel">
           <h2>Historial</h2>
           {enriched.length ? <div className="table">{enriched.slice().reverse().map(m => <div className="tr" key={m.id}><span>{m.date}</span><span>{m.account}</span><span>Alcance {m.reach || 0}</span><span>Vistas {m.views || 0}</span><button onClick={()=>deleteMetric(m.id)}>x</button></div>)}</div> : <Empty text="Todavia no hay registros." />}
