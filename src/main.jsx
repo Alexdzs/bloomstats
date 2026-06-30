@@ -29,7 +29,66 @@ function genericMetricRow(row, accountId, source) { const nums = numericValues(r
 function sheetToObjectsSmart(sheet) { const matrix = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' }); if (!matrix.length) return []; let bestIndex = 0; let bestScore = -1; matrix.forEach((row, index) => { const score = headerScore(row); if (score > bestScore) { bestScore = score; bestIndex = index; } }); if (bestScore < 2) { bestIndex = matrix.findIndex((row) => row.filter((cell) => String(cell || '').trim()).length >= 2); if (bestIndex < 0) bestIndex = 0; } const headers = matrix[bestIndex].map((cell, index) => String(cell || `Column ${index + 1}`).trim()); return matrix.slice(bestIndex + 1).map((row) => { const object = {}; headers.forEach((header, index) => { object[header || `Column ${index + 1}`] = row[index] ?? ''; }); return object; }).filter((row) => Object.values(row).some((value) => value !== '')); }
 function normalizeMetricRow(row, accountId, source) { const likes = parseNumber(getValue(row, ['likes', 'reactions', 'reactions total', 'reactions (total)', 'me gusta'])); const comments = parseNumber(getValue(row, ['comments', 'comments total', 'comments (total)', 'comentarios'])); const reposts = parseNumber(getValue(row, ['reposts', 'reposts total', 'reposts (total)', 'shares', 'compartidos'])); const clicks = parseNumber(getValue(row, ['clicks', 'clicks total', 'clicks (total)', 'clics'])); const impressions = parseNumber(getValue(row, ['impressions', 'impressions total', 'impressions (total)', 'impresiones', 'impressions organic', 'impressions (organic)'])); const reach = parseNumber(getValue(row, ['reach', 'alcance', 'unique impressions organic', 'unique impressions (organic)'])); const views = parseNumber(getValue(row, ['views', 'vistas', 'offsite views'])); const engagement = parseNumber(getValue(row, ['engagement', 'interacciones'])) || likes + comments + reposts + clicks; if (!(impressions || reach || views || clicks || engagement || likes || comments || reposts || getValue(row, ['post title','title','publicacion','publicación']))) return genericMetricRow(row, accountId, source); return { id: crypto.randomUUID(), accountId, source, date: normalizeDate(getValue(row, ['date', 'fecha', 'created date', 'posted date'])), title: String(getValue(row, ['post title', 'title', 'publicacion', 'publicación'])).slice(0, 180), link: String(getValue(row, ['post link', 'link', 'url'])), impressions, reach, views, clicks, likes, comments, reposts, engagement, engagementRate: parseNumber(getValue(row, ['engagement rate', 'engagement rate total', 'engagement rate (total)', 'click through rate ctr', 'click through rate (ctr)'])) }; }
 function downloadUrl(url, filename) { const a = document.createElement('a'); a.href = url; a.download = filename; a.click(); }
-function exportRowsToWorkbook(rows, totals) { const summary = [{ metrica: 'Impresiones', valor: totals.impressions }, { metrica: 'Alcance', valor: totals.reach }, { metrica: 'Clicks', valor: totals.clicks }, { metrica: 'Interacciones', valor: totals.engagement }]; const records = rows.map((row) => ({ fecha: row.date, cuenta: row.accountName, titulo: row.title || '', impresiones: row.impressions || 0, alcance: row.reach || 0, clicks: row.clicks || 0, interacciones: row.engagement || 0, fuente: row.source || '' })); const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(summary), 'Resumen'); XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(records), 'Registros'); XLSX.writeFile(wb, `bloomstats-datos-${today()}.xlsx`); }
+function setSheetWidths(sheet, widths) { sheet['!cols'] = widths.map((wch) => ({ wch })); }
+function exportRowsToWorkbook(rows, topRows, totals) {
+  const byDateMap = rows.reduce((acc, row) => {
+    const key = row.date || today();
+    if (!acc[key]) acc[key] = { fecha: key, publicaciones: 0, impresiones: 0, alcance: 0, vistas: 0, clicks: 0, likes: 0, comentarios: 0, republicaciones: 0, interacciones: 0 };
+    acc[key].publicaciones += row.title ? 1 : 0;
+    acc[key].impresiones += row.impressions || 0;
+    acc[key].alcance += row.reach || 0;
+    acc[key].vistas += row.views || 0;
+    acc[key].clicks += row.clicks || 0;
+    acc[key].likes += row.likes || 0;
+    acc[key].comentarios += row.comments || 0;
+    acc[key].republicaciones += row.reposts || 0;
+    acc[key].interacciones += row.engagement || 0;
+    return acc;
+  }, {});
+  const summary = [
+    { metrica: 'Total de registros', valor: rows.length },
+    { metrica: 'Publicaciones detectadas', valor: rows.filter((row) => row.title).length },
+    { metrica: 'Impresiones', valor: totals.impressions },
+    { metrica: 'Alcance', valor: totals.reach },
+    { metrica: 'Clicks', valor: totals.clicks },
+    { metrica: 'Interacciones', valor: totals.engagement },
+    { metrica: 'Fecha de exportacion', valor: today() }
+  ];
+  const records = rows.map((row, index) => ({
+    '#': index + 1,
+    fecha: row.date || '',
+    cuenta: row.accountName || '',
+    titulo_post: row.title || '',
+    link: row.link || '',
+    impresiones: row.impressions || 0,
+    alcance: row.reach || 0,
+    vistas: row.views || 0,
+    clicks: row.clicks || 0,
+    likes: row.likes || 0,
+    comentarios: row.comments || 0,
+    republicaciones: row.reposts || 0,
+    interacciones: row.engagement || 0,
+    tasa_interaccion: row.engagementRate || 0,
+    fuente: row.source || '',
+    columnas_originales: row.rawColumns || ''
+  }));
+  const top = topRows.map((row, index) => ({ ranking: index + 1, fecha: row.date || '', cuenta: row.accountName || '', titulo_post: row.title || '', impresiones: row.impressions || 0, clicks: row.clicks || 0, interacciones: row.engagement || 0, link: row.link || '' }));
+  const byDate = Object.values(byDateMap).sort((a, b) => String(a.fecha).localeCompare(String(b.fecha)));
+  const wb = XLSX.utils.book_new();
+  const wsSummary = XLSX.utils.json_to_sheet(summary);
+  const wsRecords = XLSX.utils.json_to_sheet(records);
+  const wsTop = XLSX.utils.json_to_sheet(top);
+  const wsDate = XLSX.utils.json_to_sheet(byDate);
+  setSheetWidths(wsSummary, [28, 18]);
+  setSheetWidths(wsRecords, [6, 14, 26, 48, 42, 14, 12, 12, 12, 10, 14, 18, 16, 18, 12, 42]);
+  setSheetWidths(wsTop, [10, 14, 26, 48, 14, 12, 16, 42]);
+  setSheetWidths(wsDate, [14, 16, 14, 12, 12, 12, 10, 14, 18, 16]);
+  XLSX.utils.book_append_sheet(wb, wsSummary, 'Resumen');
+  XLSX.utils.book_append_sheet(wb, wsRecords, 'Posts completos');
+  XLSX.utils.book_append_sheet(wb, wsTop, 'Top publicaciones');
+  XLSX.utils.book_append_sheet(wb, wsDate, 'Por fecha');
+  XLSX.writeFile(wb, `bloomstats-reporte-excel-${today()}.xlsx`);
+}
 
 function App() {
   const fileInputRef = useRef(null);
@@ -52,7 +111,7 @@ function App() {
   function clearMetrics() { save({ ...data, metrics: [] }); setStatus('Metricas borradas. Puedes importar de nuevo.'); }
   async function exportChartPng() { if (!chartRef.current || !metrics.length) { setStatus('Primero importa datos para generar una grafica.'); return; } const canvas = await html2canvas(chartRef.current, { backgroundColor: '#0f172a', scale: 2 }); downloadUrl(canvas.toDataURL('image/png'), `bloomstats-grafica-${today()}.png`); }
   async function exportPdf() { if (!reportRef.current || !metrics.length) { setStatus('Primero importa datos para generar un reporte.'); return; } const canvas = await html2canvas(reportRef.current, { backgroundColor: '#07111f', scale: 2 }); const img = canvas.toDataURL('image/png'); const pdf = new jsPDF({ orientation: 'landscape', unit: 'px', format: [canvas.width, canvas.height] }); pdf.addImage(img, 'PNG', 0, 0, canvas.width, canvas.height); pdf.save(`bloomstats-reporte-${today()}.pdf`); }
-  function exportExcel() { const rows = topPosts.length ? topPosts : metrics; if (!rows.length) { setStatus('No hay registros para exportar.'); return; } exportRowsToWorkbook(rows, totals); }
+  function exportExcel() { if (!metrics.length) { setStatus('No hay registros para exportar.'); return; } exportRowsToWorkbook(metrics, topPosts.length ? topPosts : metrics.slice(0, 10), totals); }
   return (
     <main className="shell">
       <div ref={reportRef} className="reportArea">
