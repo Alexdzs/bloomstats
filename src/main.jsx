@@ -2,7 +2,8 @@ import React, { useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import Papa from 'papaparse';
 import * as XLSX from 'xlsx';
-import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart3, FileSpreadsheet, UploadCloud, Trash2, Plus, CheckCircle2 } from 'lucide-react';
+import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
+import { BarChart3, FileSpreadsheet, UploadCloud, Trash2, Plus, CheckCircle2 } from 'lucide-react';
 import './styles.css';
 
 const STORAGE_KEY = 'bloomstats-v2';
