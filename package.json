@@ -17,7 +17,9 @@
     "lucide-react": "latest",
     "papaparse": "latest",
     "recharts": "latest",
-    "xlsx": "latest"
+    "xlsx": "latest",
+    "html2canvas": "latest",
+    "jspdf": "latest"
   },
   "devDependencies": {}
 }
