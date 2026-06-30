@@ -12,7 +12,8 @@ const initialData = {
   accounts: [
     { id: crypto.randomUUID(), platform: 'instagram', name: '@scalewithbloom', color: '#f472b6' },
     { id: crypto.randomUUID(), platform: 'youtube', name: 'Bloom Partner', color: '#fb7185' },
-    { id: crypto.randomUUID(), platform: 'facebook', name: 'Bloom Digitals', color: '#60a5fa' }
+    { id: crypto.randomUUID(), platform: 'facebook', name: 'Bloom Digitals', color: '#60a5fa' },
+    { id: crypto.randomUUID(), platform: 'linkedin', name: 'Bloom Digitals LinkedIn', color: '#38bdf8' }
   ],
   metrics: []
 };
@@ -29,25 +30,42 @@ function platformIcon(platform) {
 }
 
 function parseNumber(value) {
-  if (value == null) return 0;
+  if (value == null || value === '') return 0;
   const clean = String(value).replace(/,/g, '').replace(/[^0-9.-]/g, '');
   return Number(clean) || 0;
 }
 
+function pick(row, keys) {
+  for (const key of keys) {
+    if (row[key] !== undefined && row[key] !== null && row[key] !== '') return row[key];
+  }
+  return '';
+}
+
 function normalizeMetricRow(row, accountId, source = 'archivo') {
+  const likes = parseNumber(pick(row, ['likes', 'Likes', 'me gusta', 'Me gusta']));
+  const comments = parseNumber(pick(row, ['comments', 'Comments', 'comentarios', 'Comentarios']));
+  const shares = parseNumber(pick(row, ['shares', 'Shares', 'compartidos', 'Compartidos', 'Reposts', 'reposts']));
+  const clicks = parseNumber(pick(row, ['clicks', 'Clicks', 'clics', 'Clics']));
+  const engagementRate = parseNumber(pick(row, ['Engagement rate', 'engagement rate', 'engagement_rate', 'Tasa de interacción']));
+  const engagement = parseNumber(pick(row, ['engagement', 'Engagement', 'interacciones', 'Interacciones'])) || likes + comments + shares + clicks;
+
   return {
     id: crypto.randomUUID(),
     accountId,
-    date: row.date || row.fecha || row.Date || row.Fecha || new Date().toISOString().slice(0, 10),
-    followers: parseNumber(row.followers || row.seguidores || row.Followers || row.Seguidores),
-    reach: parseNumber(row.reach || row.alcance || row.Reach || row.Alcance),
-    impressions: parseNumber(row.impressions || row.impresiones || row.Impressions || row.Impresiones),
-    views: parseNumber(row.views || row.vistas || row.Views || row.Vistas),
-    likes: parseNumber(row.likes || row['me gusta'] || row.Likes),
-    comments: parseNumber(row.comments || row.comentarios || row.Comments || row.Comentarios),
-    shares: parseNumber(row.shares || row.compartidos || row.Shares || row.Compartidos),
-    clicks: parseNumber(row.clicks || row.clics || row.Clicks || row.Clics),
-    engagement: parseNumber(row.engagement || row.interacciones || row.Engagement || row.Interacciones),
+    date: pick(row, ['date', 'fecha', 'Date', 'Fecha', 'Created date', 'created date', 'Created Date']) || new Date().toISOString().slice(0, 10),
+    title: String(pick(row, ['Post title', 'post title', 'Title', 'title', 'Publicación']) || '').slice(0, 180),
+    link: String(pick(row, ['Post link', 'post link', 'Link', 'link', 'URL']) || ''),
+    followers: parseNumber(pick(row, ['followers', 'seguidores', 'Followers', 'Seguidores', 'Follows'])),
+    reach: parseNumber(pick(row, ['reach', 'alcance', 'Reach', 'Alcance'])),
+    impressions: parseNumber(pick(row, ['impressions', 'impresiones', 'Impressions', 'Impresiones'])),
+    views: parseNumber(pick(row, ['views', 'vistas', 'Views', 'Vistas', 'Offsite Views'])),
+    likes,
+    comments,
+    shares,
+    clicks,
+    engagement,
+    engagementRate,
     source
   };
 }
@@ -72,6 +90,7 @@ function App() {
   const [selectedAccount, setSelectedAccount] = useState(data.accounts[0]?.id || '');
   const [rawText, setRawText] = useState('');
   const [newAccount, setNewAccount] = useState({ name: '', platform: 'instagram' });
+  const [importMessage, setImportMessage] = useState('');
 
   function save(next) {
     setData(next);
@@ -83,10 +102,12 @@ function App() {
   const totals = enriched.reduce((acc, m) => {
     acc.followers = Math.max(acc.followers, m.followers || 0);
     acc.reach += m.reach || 0;
+    acc.impressions += m.impressions || 0;
     acc.views += m.views || 0;
+    acc.clicks += m.clicks || 0;
     acc.engagement += m.engagement || 0;
     return acc;
-  }, { followers: 0, reach: 0, views: 0, engagement: 0 });
+  }, { followers: 0, reach: 0, impressions: 0, views: 0, clicks: 0, engagement: 0 });
 
   function addAccount() {
     if (!newAccount.name.trim()) return;
@@ -99,19 +120,25 @@ function App() {
     const metric = extractFromText(rawText, selectedAccount);
     save({ ...data, metrics: [...data.metrics, metric] });
     setRawText('');
+    setImportMessage('Texto importado correctamente.');
+  }
+
+  function importRows(rows, source) {
+    const normalized = rows.map((row) => normalizeMetricRow(row, selectedAccount, source)).filter((row) => row.impressions || row.reach || row.views || row.clicks || row.engagement || row.likes || row.title);
+    save({ ...data, metrics: [...data.metrics, ...normalized] });
+    setImportMessage(`Se importaron ${normalized.length} registros desde ${source}.`);
   }
 
   function importFile(file) {
     if (!file || !selectedAccount) return;
     const name = file.name.toLowerCase();
+    setImportMessage('Leyendo archivo...');
+
     if (name.endsWith('.csv')) {
       Papa.parse(file, {
         header: true,
         skipEmptyLines: true,
-        complete: (results) => {
-          const rows = results.data.map((row) => normalizeMetricRow(row, selectedAccount, 'csv'));
-          save({ ...data, metrics: [...data.metrics, ...rows] });
-        }
+        complete: (results) => importRows(results.data, 'csv')
       });
       return;
     }
@@ -119,11 +146,11 @@ function App() {
     const reader = new FileReader();
     reader.onload = (event) => {
       const workbook = XLSX.read(event.target.result, { type: 'array' });
-      const firstSheet = workbook.SheetNames[0];
-      const sheet = workbook.Sheets[firstSheet];
-      const jsonRows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
-      const rows = jsonRows.map((row) => normalizeMetricRow(row, selectedAccount, name.endsWith('.xls') ? 'xls' : 'xlsx'));
-      save({ ...data, metrics: [...data.metrics, ...rows] });
+      const allRows = workbook.SheetNames.flatMap((sheetName) => {
+        const sheet = workbook.Sheets[sheetName];
+        return XLSX.utils.sheet_to_json(sheet, { defval: '' });
+      });
+      importRows(allRows, name.endsWith('.xls') ? 'xls' : 'xlsx');
     };
     reader.readAsArrayBuffer(file);
   }
@@ -141,23 +168,24 @@ function App() {
       </aside>
       <section className="content">
         <header className="hero">
-          <div><p className="eyebrow">Marketing dashboard</p><h1>Metricas rapidas, cero datos inventados.</h1><p>Primera version: guarda datos en tu navegador. Siguiente paso: Supabase para nube.</p></div>
+          <div><p className="eyebrow">Marketing dashboard</p><h1>Metricas rapidas, cero datos inventados.</h1><p>Compatible con reportes de contenido de LinkedIn, CSV y Excel.</p></div>
           <button onClick={() => save({ ...data, metrics: [] })}><Trash2 size={16}/> limpiar metricas</button>
         </header>
         <section className="cards">
-          <Card title="Seguidores" value={totals.followers} />
+          <Card title="Impresiones" value={totals.impressions} />
           <Card title="Alcance" value={totals.reach} />
-          <Card title="Vistas" value={totals.views} />
+          <Card title="Clicks" value={totals.clicks} />
           <Card title="Interacciones" value={totals.engagement} />
         </section>
         <section className="grid">
           <div className="panel wide">
             <h2><BarChart3/> Evolucion</h2>
-            {enriched.length ? <ResponsiveContainer width="100%" height={300}><LineChart data={enriched}><XAxis dataKey="date"/><YAxis/><Tooltip/><Line type="monotone" dataKey="reach" strokeWidth={3}/><Line type="monotone" dataKey="views" strokeWidth={3}/></LineChart></ResponsiveContainer> : <Empty text="Aun no hay metricas. Importa texto, CSV o Excel." />}
+            {enriched.length ? <ResponsiveContainer width="100%" height={300}><LineChart data={enriched}><XAxis dataKey="date"/><YAxis/><Tooltip/><Line type="monotone" dataKey="impressions" strokeWidth={3}/><Line type="monotone" dataKey="clicks" strokeWidth={3}/></LineChart></ResponsiveContainer> : <Empty text="Aun no hay metricas. Importa texto, CSV o Excel." />}
           </div>
           <div className="panel">
             <h2>Resumen IA</h2>
-            <p>{latest ? `Ultima carga: ${latest.account}. Alcance ${latest.reach || 0}, vistas ${latest.views || 0} e interacciones ${latest.engagement || 0}.` : 'Cuando importes datos, aqui aparecera una lectura rapida del rendimiento.'}</p>
+            <p>{latest ? `Ultima carga: ${latest.account}. Impresiones ${latest.impressions || 0}, clicks ${latest.clicks || 0} e interacciones ${latest.engagement || 0}.` : 'Cuando importes datos, aqui aparecera una lectura rapida del rendimiento.'}</p>
+            {importMessage && <p className="notice">{importMessage}</p>}
           </div>
         </section>
         <section className="grid">
@@ -175,7 +203,7 @@ function App() {
         </section>
         <section className="panel">
           <h2>Historial</h2>
-          {enriched.length ? <div className="table">{enriched.slice().reverse().map(m => <div className="tr" key={m.id}><span>{m.date}</span><span>{m.account}</span><span>Alcance {m.reach || 0}</span><span>Vistas {m.views || 0}</span><button onClick={()=>deleteMetric(m.id)}>x</button></div>)}</div> : <Empty text="Todavia no hay registros." />}
+          {enriched.length ? <div className="table">{enriched.slice().reverse().map(m => <div className="tr" key={m.id}><span>{m.date}</span><span>{m.title || m.account}</span><span>Imp. {m.impressions || 0}</span><span>Clicks {m.clicks || 0}</span><button onClick={()=>deleteMetric(m.id)}>x</button></div>)}</div> : <Empty text="Todavia no hay registros." />}
         </section>
       </section>
     </main>
