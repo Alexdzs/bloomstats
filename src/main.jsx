@@ -1,216 +1,265 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import Papa from 'papaparse';
 import * as XLSX from 'xlsx';
-import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
-import { Upload, BarChart3, FileText, Sparkles, Plus, Trash2 } from 'lucide-react';
+import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart3, FileSpreadsheet, UploadCloud, Trash2, Plus, CheckCircle2 } from 'lucide-react';
 import './styles.css';
 
-const STORAGE_KEY = 'bloomstats-v1';
+const STORAGE_KEY = 'bloomstats-v2';
 
-const initialData = {
-  accounts: [
-    { id: crypto.randomUUID(), platform: 'instagram', name: '@scalewithbloom', color: '#f472b6' },
-    { id: crypto.randomUUID(), platform: 'youtube', name: 'Bloom Partner', color: '#fb7185' },
-    { id: crypto.randomUUID(), platform: 'facebook', name: 'Bloom Digitals', color: '#60a5fa' },
-    { id: crypto.randomUUID(), platform: 'linkedin', name: 'Bloom Digitals LinkedIn', color: '#38bdf8' }
-  ],
-  metrics: []
-};
+const DEFAULT_ACCOUNTS = [
+  { id: 'linkedin-bloom', platform: 'linkedin', name: 'Bloom Digitals LinkedIn' },
+  { id: 'instagram-bloom', platform: 'instagram', name: '@scalewithbloom' },
+  { id: 'youtube-bloom', platform: 'youtube', name: 'Bloom Partner' },
+  { id: 'facebook-bloom', platform: 'facebook', name: 'Bloom Digitals' }
+];
 
-function loadData() {
-  const saved = localStorage.getItem(STORAGE_KEY);
-  if (!saved) return initialData;
-  try { return JSON.parse(saved); } catch { return initialData; }
+function today() {
+  return new Date().toISOString().slice(0, 10);
 }
 
-function platformIcon(platform) {
-  const labels = { instagram: 'IG', youtube: 'YT', facebook: 'FB', tiktok: 'TT', linkedin: 'IN' };
-  return <span className="platformBadge">{labels[platform] || 'RS'}</span>;
+function loadData() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
+    if (saved?.accounts && saved?.metrics) return saved;
+  } catch {}
+  return { accounts: DEFAULT_ACCOUNTS, metrics: [] };
 }
 
 function parseNumber(value) {
-  if (value == null || value === '') return 0;
-  const clean = String(value).replace(/,/g, '').replace(/[^0-9.-]/g, '');
+  if (value === undefined || value === null || value === '') return 0;
+  if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
+  const clean = String(value).replace(/,/g, '').replace(/%/g, '').replace(/[^0-9.-]/g, '');
   return Number(clean) || 0;
 }
 
-function pick(row, keys) {
-  for (const key of keys) {
-    if (row[key] !== undefined && row[key] !== null && row[key] !== '') return row[key];
+function normalizeKey(key) {
+  return String(key || '').trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+function getValue(row, aliases) {
+  const normalized = Object.fromEntries(Object.entries(row).map(([key, value]) => [normalizeKey(key), value]));
+  for (const alias of aliases) {
+    const value = normalized[normalizeKey(alias)];
+    if (value !== undefined && value !== null && value !== '') return value;
   }
   return '';
 }
 
-function normalizeMetricRow(row, accountId, source = 'archivo') {
-  const likes = parseNumber(pick(row, ['likes', 'Likes', 'me gusta', 'Me gusta']));
-  const comments = parseNumber(pick(row, ['comments', 'Comments', 'comentarios', 'Comentarios']));
-  const shares = parseNumber(pick(row, ['shares', 'Shares', 'compartidos', 'Compartidos', 'Reposts', 'reposts']));
-  const clicks = parseNumber(pick(row, ['clicks', 'Clicks', 'clics', 'Clics']));
-  const engagementRate = parseNumber(pick(row, ['Engagement rate', 'engagement rate', 'engagement_rate', 'Tasa de interacción']));
-  const engagement = parseNumber(pick(row, ['engagement', 'Engagement', 'interacciones', 'Interacciones'])) || likes + comments + shares + clicks;
+function normalizeDate(value) {
+  if (!value) return today();
+  if (value instanceof Date) return value.toISOString().slice(0, 10);
+  if (typeof value === 'number') {
+    const parsed = XLSX.SSF.parse_date_code(value);
+    if (parsed) return `${parsed.y}-${String(parsed.m).padStart(2, '0')}-${String(parsed.d).padStart(2, '0')}`;
+  }
+  const raw = String(value).trim();
+  const date = new Date(raw);
+  if (!Number.isNaN(date.getTime())) return date.toISOString().slice(0, 10);
+  return raw;
+}
+
+function rowLooksUseful(row) {
+  const values = Object.values(row).join(' ').toLowerCase();
+  return values.includes('impression') || values.includes('click') || values.includes('post title') || values.includes('created date') || values.includes('engagement') || values.includes('alcance') || values.includes('impres');
+}
+
+function sheetToObjectsSmart(sheet) {
+  const matrix = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+  let headerIndex = matrix.findIndex((row) => rowLooksUseful(Object.fromEntries(row.map((value, index) => [index, value]))));
+  if (headerIndex < 0) headerIndex = 0;
+  const headers = matrix[headerIndex].map((cell, index) => String(cell || `Column ${index + 1}`).trim());
+  return matrix.slice(headerIndex + 1).map((row) => {
+    const object = {};
+    headers.forEach((header, index) => { object[header] = row[index] ?? ''; });
+    return object;
+  }).filter((row) => Object.values(row).some((value) => value !== ''));
+}
+
+function normalizeMetricRow(row, accountId, source) {
+  const likes = parseNumber(getValue(row, ['likes', 'reactions', 'reactions total', 'reactions (total)', 'me gusta']));
+  const comments = parseNumber(getValue(row, ['comments', 'comments total', 'comments (total)', 'comentarios']));
+  const reposts = parseNumber(getValue(row, ['reposts', 'reposts total', 'reposts (total)', 'shares', 'compartidos']));
+  const clicks = parseNumber(getValue(row, ['clicks', 'clicks total', 'clicks (total)', 'clics']));
+  const engagement = parseNumber(getValue(row, ['engagement', 'interacciones'])) || likes + comments + reposts + clicks;
 
   return {
     id: crypto.randomUUID(),
     accountId,
-    date: pick(row, ['date', 'fecha', 'Date', 'Fecha', 'Created date', 'created date', 'Created Date']) || new Date().toISOString().slice(0, 10),
-    title: String(pick(row, ['Post title', 'post title', 'Title', 'title', 'Publicación']) || '').slice(0, 180),
-    link: String(pick(row, ['Post link', 'post link', 'Link', 'link', 'URL']) || ''),
-    followers: parseNumber(pick(row, ['followers', 'seguidores', 'Followers', 'Seguidores', 'Follows'])),
-    reach: parseNumber(pick(row, ['reach', 'alcance', 'Reach', 'Alcance'])),
-    impressions: parseNumber(pick(row, ['impressions', 'impresiones', 'Impressions', 'Impresiones'])),
-    views: parseNumber(pick(row, ['views', 'vistas', 'Views', 'Vistas', 'Offsite Views'])),
+    source,
+    date: normalizeDate(getValue(row, ['date', 'fecha', 'created date', 'posted date'])),
+    title: String(getValue(row, ['post title', 'title', 'publicacion', 'publicación'])).slice(0, 180),
+    link: String(getValue(row, ['post link', 'link', 'url'])),
+    impressions: parseNumber(getValue(row, ['impressions', 'impressions total', 'impressions (total)', 'impresiones', 'impressions organic', 'impressions (organic)'])),
+    reach: parseNumber(getValue(row, ['reach', 'alcance', 'unique impressions organic', 'unique impressions (organic)'])),
+    views: parseNumber(getValue(row, ['views', 'vistas', 'offsite views'])),
+    clicks,
     likes,
     comments,
-    shares,
-    clicks,
+    reposts,
     engagement,
-    engagementRate,
-    source
+    engagementRate: parseNumber(getValue(row, ['engagement rate', 'engagement rate total', 'engagement rate (total)', 'click through rate ctr', 'click through rate (ctr)']))
   };
 }
 
-function extractFromText(text, accountId) {
-  const lower = text.toLowerCase();
-  const fields = ['followers', 'reach', 'impressions', 'views', 'likes', 'comments', 'shares', 'clicks', 'engagement'];
-  const metric = { id: crypto.randomUUID(), accountId, date: new Date().toISOString().slice(0, 10), source: 'texto', notes: text.slice(0, 500) };
-  fields.forEach((field) => {
-    const spanish = {
-      followers: 'seguidores', reach: 'alcance', impressions: 'impresiones', views: 'vistas', likes: 'me gusta', comments: 'comentarios', shares: 'compartidos', clicks: 'clics', engagement: 'interacciones'
-    }[field];
-    const rx = new RegExp(`(${field}|${spanish})\\D{0,25}([0-9][0-9.,]*)`, 'i');
-    const match = lower.match(rx);
-    metric[field] = match ? parseNumber(match[2]) : 0;
-  });
-  return metric;
-}
-
 function App() {
+  const fileInputRef = useRef(null);
   const [data, setData] = useState(loadData);
   const [selectedAccount, setSelectedAccount] = useState(data.accounts[0]?.id || '');
-  const [rawText, setRawText] = useState('');
-  const [newAccount, setNewAccount] = useState({ name: '', platform: 'instagram' });
-  const [importMessage, setImportMessage] = useState('');
+  const [newAccount, setNewAccount] = useState('');
+  const [newPlatform, setNewPlatform] = useState('linkedin');
+  const [status, setStatus] = useState('Sube un archivo CSV, XLS o XLSX para empezar.');
+  const [isImporting, setIsImporting] = useState(false);
 
   function save(next) {
     setData(next);
     localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
   }
 
-  const enriched = useMemo(() => data.metrics.map((m) => ({ ...m, account: data.accounts.find((a) => a.id === m.accountId)?.name || 'Cuenta' })), [data]);
-  const latest = enriched.at(-1);
-  const totals = enriched.reduce((acc, m) => {
-    acc.followers = Math.max(acc.followers, m.followers || 0);
-    acc.reach += m.reach || 0;
-    acc.impressions += m.impressions || 0;
-    acc.views += m.views || 0;
-    acc.clicks += m.clicks || 0;
-    acc.engagement += m.engagement || 0;
+  const account = data.accounts.find((item) => item.id === selectedAccount);
+  const metrics = useMemo(() => data.metrics.map((metric) => ({ ...metric, accountName: data.accounts.find((a) => a.id === metric.accountId)?.name || 'Cuenta' })), [data]);
+  const totals = useMemo(() => metrics.reduce((acc, metric) => {
+    acc.impressions += metric.impressions || 0;
+    acc.reach += metric.reach || 0;
+    acc.clicks += metric.clicks || 0;
+    acc.engagement += metric.engagement || 0;
+    acc.posts += metric.title ? 1 : 0;
     return acc;
-  }, { followers: 0, reach: 0, impressions: 0, views: 0, clicks: 0, engagement: 0 });
+  }, { impressions: 0, reach: 0, clicks: 0, engagement: 0, posts: 0 }), [metrics]);
+
+  const topPosts = useMemo(() => metrics.filter((m) => m.title).sort((a, b) => (b.impressions + b.clicks * 8) - (a.impressions + a.clicks * 8)).slice(0, 8), [metrics]);
 
   function addAccount() {
-    if (!newAccount.name.trim()) return;
-    save({ ...data, accounts: [...data.accounts, { id: crypto.randomUUID(), ...newAccount, color: '#a78bfa' }] });
-    setNewAccount({ name: '', platform: 'instagram' });
-  }
-
-  function importText() {
-    if (!rawText.trim() || !selectedAccount) return;
-    const metric = extractFromText(rawText, selectedAccount);
-    save({ ...data, metrics: [...data.metrics, metric] });
-    setRawText('');
-    setImportMessage('Texto importado correctamente.');
+    if (!newAccount.trim()) return;
+    const next = { id: crypto.randomUUID(), platform: newPlatform, name: newAccount.trim() };
+    save({ ...data, accounts: [...data.accounts, next] });
+    setSelectedAccount(next.id);
+    setNewAccount('');
   }
 
   function importRows(rows, source) {
-    const normalized = rows.map((row) => normalizeMetricRow(row, selectedAccount, source)).filter((row) => row.impressions || row.reach || row.views || row.clicks || row.engagement || row.likes || row.title);
+    const normalized = rows.map((row) => normalizeMetricRow(row, selectedAccount, source)).filter((row) => row.impressions || row.reach || row.views || row.clicks || row.engagement || row.title);
+    if (!normalized.length) {
+      setStatus('No pude encontrar columnas de metricas en ese archivo. Revisa que tenga encabezados como Impressions, Clicks, Date o Post title.');
+      return;
+    }
     save({ ...data, metrics: [...data.metrics, ...normalized] });
-    setImportMessage(`Se importaron ${normalized.length} registros desde ${source}.`);
+    const postCount = normalized.filter((row) => row.title).length;
+    setStatus(`Listo: importe ${normalized.length} registros${postCount ? ` y ${postCount} publicaciones` : ''} para ${account?.name || 'la cuenta seleccionada'}.`);
   }
 
   function importFile(file) {
-    if (!file || !selectedAccount) return;
-    const name = file.name.toLowerCase();
-    setImportMessage('Leyendo archivo...');
+    if (!file) return;
+    if (!selectedAccount) {
+      setStatus('Primero selecciona una cuenta.');
+      return;
+    }
+    setIsImporting(true);
+    setStatus(`Leyendo ${file.name}...`);
+    const fileName = file.name.toLowerCase();
 
-    if (name.endsWith('.csv')) {
+    if (fileName.endsWith('.csv')) {
       Papa.parse(file, {
         header: true,
         skipEmptyLines: true,
-        complete: (results) => importRows(results.data, 'csv')
+        complete: (results) => {
+          importRows(results.data, 'csv');
+          setIsImporting(false);
+        },
+        error: () => {
+          setStatus('No pude leer el CSV.');
+          setIsImporting(false);
+        }
       });
       return;
     }
 
     const reader = new FileReader();
     reader.onload = (event) => {
-      const workbook = XLSX.read(event.target.result, { type: 'array' });
-      const allRows = workbook.SheetNames.flatMap((sheetName) => {
-        const sheet = workbook.Sheets[sheetName];
-        return XLSX.utils.sheet_to_json(sheet, { defval: '' });
-      });
-      importRows(allRows, name.endsWith('.xls') ? 'xls' : 'xlsx');
+      try {
+        const workbook = XLSX.read(event.target.result, { type: 'array', cellDates: true });
+        const rows = workbook.SheetNames.flatMap((sheetName) => sheetToObjectsSmart(workbook.Sheets[sheetName]));
+        importRows(rows, fileName.endsWith('.xls') ? 'xls' : 'xlsx');
+      } catch (error) {
+        setStatus('No pude leer el Excel. Prueba exportarlo otra vez o convertirlo a CSV.');
+      } finally {
+        setIsImporting(false);
+      }
+    };
+    reader.onerror = () => {
+      setStatus('No pude abrir el archivo seleccionado.');
+      setIsImporting(false);
     };
     reader.readAsArrayBuffer(file);
   }
 
-  function deleteMetric(id) {
-    save({ ...data, metrics: data.metrics.filter((m) => m.id !== id) });
+  function clearMetrics() {
+    save({ ...data, metrics: [] });
+    setStatus('Metricas borradas. Puedes importar de nuevo.');
   }
 
   return (
-    <main className="app">
-      <aside className="sidebar">
-        <div className="brand"><Sparkles /> <span>BloomStats</span></div>
-        <p>Analiza estadisticas de redes sin sincronizar APIs. Sube texto, CSV o Excel y deja que el dashboard haga la talacha.</p>
-        <nav><a>Dashboard</a><a>Importar</a><a>Cuentas</a><a>Analisis</a></nav>
-      </aside>
-      <section className="content">
-        <header className="hero">
-          <div><p className="eyebrow">Marketing dashboard</p><h1>Metricas rapidas, cero datos inventados.</h1><p>Compatible con reportes de contenido de LinkedIn, CSV y Excel.</p></div>
-          <button onClick={() => save({ ...data, metrics: [] })}><Trash2 size={16}/> limpiar metricas</button>
-        </header>
-        <section className="cards">
-          <Card title="Impresiones" value={totals.impressions} />
-          <Card title="Alcance" value={totals.reach} />
-          <Card title="Clicks" value={totals.clicks} />
-          <Card title="Interacciones" value={totals.engagement} />
-        </section>
-        <section className="grid">
-          <div className="panel wide">
-            <h2><BarChart3/> Evolucion</h2>
-            {enriched.length ? <ResponsiveContainer width="100%" height={300}><LineChart data={enriched}><XAxis dataKey="date"/><YAxis/><Tooltip/><Line type="monotone" dataKey="impressions" strokeWidth={3}/><Line type="monotone" dataKey="clicks" strokeWidth={3}/></LineChart></ResponsiveContainer> : <Empty text="Aun no hay metricas. Importa texto, CSV o Excel." />}
+    <main className="shell">
+      <header className="topbar">
+        <div>
+          <p className="eyebrow">BloomStats</p>
+          <h1>Dashboard de estadisticas sociales</h1>
+          <p className="subtitle">Importa reportes reales de LinkedIn, Meta, YouTube o CSV sin conectar APIs.</p>
+        </div>
+        <button className="ghost" onClick={clearMetrics}><Trash2 size={16} /> limpiar datos</button>
+      </header>
+
+      <section className="statsGrid">
+        <Card title="Impresiones" value={totals.impressions} />
+        <Card title="Alcance" value={totals.reach} />
+        <Card title="Clicks" value={totals.clicks} />
+        <Card title="Interacciones" value={totals.engagement} />
+      </section>
+
+      <section className="mainGrid">
+        <div className="panel importPanel">
+          <div className="sectionTitle"><UploadCloud /><div><h2>Importar archivo</h2><p>Selecciona cuenta y sube CSV, XLS o XLSX.</p></div></div>
+          <label>Cuenta</label>
+          <select value={selectedAccount} onChange={(e) => setSelectedAccount(e.target.value)}>
+            {data.accounts.map((item) => <option key={item.id} value={item.id}>{item.name} · {item.platform}</option>)}
+          </select>
+          <button className="uploadButton" disabled={isImporting} onClick={() => fileInputRef.current?.click()}>
+            <FileSpreadsheet size={20} /> {isImporting ? 'Importando...' : 'Elegir CSV / XLS / XLSX'}
+          </button>
+          <input ref={fileInputRef} className="hiddenInput" type="file" accept=".csv,.xls,.xlsx" onChange={(event) => { const file = event.target.files?.[0]; importFile(file); event.target.value = ''; }} />
+          <p className="notice"><CheckCircle2 size={16} /> {status}</p>
+          <div className="accountCreator">
+            <h3>Agregar cuenta</h3>
+            <div className="row">
+              <select value={newPlatform} onChange={(e) => setNewPlatform(e.target.value)}>
+                <option value="linkedin">LinkedIn</option><option value="instagram">Instagram</option><option value="facebook">Facebook</option><option value="youtube">YouTube</option><option value="tiktok">TikTok</option>
+              </select>
+              <input value={newAccount} onChange={(e) => setNewAccount(e.target.value)} placeholder="Nombre de cuenta" />
+              <button onClick={addAccount}><Plus size={16} /> agregar</button>
+            </div>
           </div>
-          <div className="panel">
-            <h2>Resumen IA</h2>
-            <p>{latest ? `Ultima carga: ${latest.account}. Impresiones ${latest.impressions || 0}, clicks ${latest.clicks || 0} e interacciones ${latest.engagement || 0}.` : 'Cuando importes datos, aqui aparecera una lectura rapida del rendimiento.'}</p>
-            {importMessage && <p className="notice">{importMessage}</p>}
-          </div>
-        </section>
-        <section className="grid">
-          <div className="panel">
-            <h2><Plus/> Cuentas</h2>
-            <div className="row"><select value={newAccount.platform} onChange={(e)=>setNewAccount({...newAccount, platform:e.target.value})}><option>instagram</option><option>youtube</option><option>facebook</option><option>tiktok</option><option>linkedin</option></select><input placeholder="Nombre" value={newAccount.name} onChange={(e)=>setNewAccount({...newAccount, name:e.target.value})}/><button onClick={addAccount}>Agregar</button></div>
-            <div className="accountList">{data.accounts.map(a => <div className="account" key={a.id}>{platformIcon(a.platform)} <span>{a.name}</span></div>)}</div>
-          </div>
-          <div className="panel">
-            <h2><Upload/> Importar datos</h2>
-            <select value={selectedAccount} onChange={(e)=>setSelectedAccount(e.target.value)}>{data.accounts.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}</select>
-            <textarea placeholder="Pega texto copiado de Insights. Ejemplo: Seguidores 320 Alcance 1500 Vistas 4200 Interacciones 180" value={rawText} onChange={(e)=>setRawText(e.target.value)} />
-            <div className="row"><button onClick={importText}>Importar texto</button><label className="file"><FileText size={16}/> CSV / XLS / XLSX<input type="file" accept=".csv,.xls,.xlsx" onChange={(e)=>e.target.files?.[0] && importFile(e.target.files[0])}/></label></div>
-          </div>
-        </section>
-        <section className="panel">
-          <h2>Historial</h2>
-          {enriched.length ? <div className="table">{enriched.slice().reverse().map(m => <div className="tr" key={m.id}><span>{m.date}</span><span>{m.title || m.account}</span><span>Imp. {m.impressions || 0}</span><span>Clicks {m.clicks || 0}</span><button onClick={()=>deleteMetric(m.id)}>x</button></div>)}</div> : <Empty text="Todavia no hay registros." />}
-        </section>
+        </div>
+
+        <div className="panel chartPanel">
+          <div className="sectionTitle"><BarChart3 /><div><h2>Evolucion</h2><p>Impresiones y clicks por fecha.</p></div></div>
+          {metrics.length ? <ResponsiveContainer width="100%" height={310}><LineChart data={metrics}><XAxis dataKey="date" /><YAxis /><Tooltip /><Line type="monotone" dataKey="impressions" strokeWidth={3} /><Line type="monotone" dataKey="clicks" strokeWidth={3} /></LineChart></ResponsiveContainer> : <Empty text="Aun no hay datos importados." />}
+        </div>
+      </section>
+
+      <section className="panel">
+        <div className="sectionTitle"><FileSpreadsheet /><div><h2>Publicaciones detectadas</h2><p>Ordenadas por rendimiento.</p></div></div>
+        {topPosts.length ? <div className="table">{topPosts.map((post) => <div className="tableRow" key={post.id}><span className="postTitle">{post.title || post.accountName}</span><span>{post.date}</span><span>{post.impressions.toLocaleString('es-MX')} imp.</span><span>{post.clicks.toLocaleString('es-MX')} clicks</span><span>{post.engagement.toLocaleString('es-MX')} int.</span></div>)}</div> : <Empty text="Cuando subas un reporte de contenido, aqui apareceran las publicaciones." />}
       </section>
     </main>
   );
 }
 
-function Card({ title, value }) { return <div className="card"><span>{title}</span><strong>{Number(value || 0).toLocaleString('es-MX')}</strong></div>; }
-function Empty({ text }) { return <div className="empty">{text}</div>; }
+function Card({ title, value }) {
+  return <div className="statCard"><span>{title}</span><strong>{Number(value || 0).toLocaleString('es-MX')}</strong></div>;
+}
+
+function Empty({ text }) {
+  return <div className="emptyState">{text}</div>;
+}
 
 createRoot(document.getElementById('root')).render(<App />);
